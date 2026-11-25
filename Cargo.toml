@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.100"
 description = "Custom status line renderer for Antigravity CLI (agy)"
-repository = "https://git.kmou424.moe/kmou424/agy-statusline"
+repository = "https://github.com/kmou424/agy-statusline"
 publish = false
 
 [dependencies]
