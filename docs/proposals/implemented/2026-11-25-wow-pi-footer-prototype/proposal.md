@@ -98,3 +98,14 @@ Explicit non-goals for this prototype (deferred to follow-up proposals after liv
 - **Per-invocation Git/runtime subprocess latency**: On large repositories or slow filesystems, spawning `git status` and a runtime version binary on every state change could approach the 300 ms throttle cadence. Tight timeouts prevent hitting the 5 s kill or 30-failure breaker, and real latency measurements from the prototype will guide a follow-up short-TTL cache if needed.
 - **No host RGB table for named `agy` themes**: Because `agy` does not expose its internal theme colors, presets for named `colorScheme` values are approximations rather than exact host values and may need visual tuning during live checks.
 - **Live payload accounting nuances**: Whether `context_window.total_input_tokens` already includes cached tokens and whether `model.display_name` always embeds the effort level (as in `"Gemini 4 Argon (Medium)"`) can only be confirmed against real `agy` payloads during prototype testing.
+
+## Result
+
+Shipped in `v0.1.0` (`bda659a`, `c7c767d`, `607f5c4`) and verified live in Antigravity CLI (`agy`) TUI by the owner on `2026-11-25`.
+
+- **What shipped**: Single-binary Rust status line renderer (`src/input.rs`, `src/text.rs`, `src/icons.rs`, `src/theme.rs`, `src/probes.rs`, `src/layout.rs`, `src/lib.rs`, `src/main.rs`) with `wow-pi`-aligned Row 1 + Row 2 responsive layout, ANSI/VT sanitization (CSI, OSC, ST-terminated control strings, C1 CSI), PUA-aware terminal cell width, `agy` `colorScheme`-aware semantic palettes (standard 16-color SGR for `"terminal"`, curated TrueColor presets for named schemes), concurrent bounded Git/runtime probes (`<= 200 ms` / `<= 150 ms`, `256 KiB` stdout cap), `just install` targeting `~/.local/bin/agy-statusline`, and 31 passing unit/integration tests (`just ci`).
+- **Deviations and notes**:
+  - Model effort renders as `Model effort` without square brackets to match `wow-pi`'s actual `footer-layout.ts` output, suppressing duplicate effort text when already parenthesized in `model.display_name`.
+  - `terminal_width` is deserialized as `i64` and clamped to `4096`; explicit `<= 0` produces empty output (matching `wow-pi`), while absent `terminal_width` defaults to `80`.
+  - Unknown `cycle_mode` strings are ignored; only documented `plan`, `auto`, and `accept-edits` render badges.
+  - `blaze test` (`0.20261105.4`) could not verify external crate dependencies against the local `rsproxy-sparse` Cargo mirror replacement (`the load asked for rsproxy-sparse index again after it was fetched and mounted`); pinned Rust `1.100.0` `just ci` (`cargo fmt --check`, `cargo clippy`, `cargo test`) passed all 31 tests.
