@@ -1,5 +1,7 @@
 # `wow-pi`-Aligned Footer Prototype for Antigravity CLI (`agy`)
 
+Accepted: 2026-11-25
+
 ## Problem
 
 Antigravity CLI (`agy 1.5.16`) supports replacing or stacking its built-in TUI status line via a `statusLine` shell command that reads a JSON payload from `stdin` and prints ANSI-formatted lines to `stdout` (see `2026-11-25-agy-statusline-contract`). However, `agy`'s built-in status line does not provide the dense, width-adaptive two-row developer footer style from `wow-pi` (workspace path, Git status summary, project runtime/framework, 12-cell context bar, model and effort identity, and token/cache/cost counters; see `2026-11-25-wow-pi-footer-reference`).
