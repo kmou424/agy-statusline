@@ -24,8 +24,10 @@ export AGY_STATUSLINE_OS=linux
 export AGY_STATUSLINE_ARCH=x86_64
 settings=$HOME/.gemini/antigravity-cli/settings.json
 default_binary=$HOME/.local/bin/agy-statusline
-mkdir -p "$HOME/.gemini/antigravity-cli" "$tmp_dir/payload"
-printf '%s\n' '{"other":{"keep":[1,true,"yes"]},"statusLine":{"padding":2,"enabled":false,"stack_with_default":true}}' > "$settings"
+mkdir -p "$HOME/.gemini/antigravity-cli" "$tmp_dir/payload" "$tmp_dir/dotfiles"
+settings_real=$tmp_dir/dotfiles/settings.json
+printf '%s\n' '{"other":{"keep":[1,true,"yes"]},"statusLine":{"padding":2,"enabled":false,"stack_with_default":true}}' > "$settings_real"
+ln -s "$settings_real" "$settings"
 printf '%s\n' 'Mock release README' > "$tmp_dir/payload/README.md"
 
 release() {
@@ -67,7 +69,8 @@ release v0.1.0 aarch64-linux-android android
 
 run_installer
 [ -x "$default_binary" ] && [ "$("$default_binary")" = stable ] || fail 'stable binary'
-check_settings '~/.local/bin/agy-statusline' false
+[ -L "$settings" ] || fail 'installer replaced settings symlink'
+check_settings '~/.local/bin/agy-statusline' true
 
 # Keep the original inode open through replacement.
 exec 3< "$default_binary"
@@ -76,10 +79,12 @@ run_installer --canary
 [ "$(sh <&3)" = stable ] || fail 'canary must leave the old open inode intact'
 exec 3<&-
 
-custom_dir=$tmp_dir/custom
+custom_dir="$tmp_dir/custom dir"
 run_installer --version=v0.1.0 --install-dir="$custom_dir" --stack-with-default
 [ "$("$custom_dir/agy-statusline")" = stable ] || fail 'custom binary'
-check_settings "$custom_dir/agy-statusline" true
+check_settings "'$custom_dir/agy-statusline'" true
+saved_cmd=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["statusLine"]["command"])' "$settings")
+[ "$(sh -c "$saved_cmd")" = stable ] || fail 'saved custom command failed under sh -c'
 cp "$settings" "$tmp_dir/settings.before"
 run_installer --version v0.1.0 --install-dir "$custom_dir" --no-configure
 cmp "$tmp_dir/settings.before" "$settings" || fail '--no-configure'
@@ -109,7 +114,7 @@ grep -F 'Missing or invalid SHA256SUMS entry' "$tmp_dir/checksum.log" >/dev/null
 # Exercise the fallback with only the installer utilities on PATH.
 tool_path=$tmp_dir/tools
 mkdir "$tool_path"
-for tool in awk chmod cp gzip mkdir mktemp mv rm tar; do
+for tool in awk chmod cp dirname gzip mkdir mktemp mv rm sed tar; do
     ln -s "$(command -v "$tool")" "$tool_path/$tool"
 done
 for tool in sha256sum shasum openssl; do
@@ -123,7 +128,7 @@ done
     minimal_dir=$HOME'/bin"\custom'
     minimal_settings=$HOME/.gemini/antigravity-cli/settings.json
     PATH=$tool_path "$installer_shell" -s -- --install-dir "$minimal_dir" --stack-with-default < "$installer"
-    python3 - "$minimal_settings" "$minimal_dir/agy-statusline" <<'PY'
+    python3 - "$minimal_settings" "'$minimal_dir/agy-statusline'" <<'PY'
 import json
 import sys
 

@@ -7,7 +7,7 @@ pub mod probes;
 pub mod text;
 pub mod theme;
 
-use std::{env, path::Path, thread, time::Duration};
+use std::{env, ffi::OsString, path::Path, thread, time::Duration};
 
 use icons::{IconMode, ResolvedIconMode};
 use input::{CurrentUsage, StatusLineInput, parse_input};
@@ -28,6 +28,16 @@ fn resolve_home_dir_with(
 
 fn home_dir() -> Option<String> {
     resolve_home_dir_with(cfg!(windows), |name| env::var(name).ok())
+}
+
+pub(crate) fn home_dir_os() -> Option<OsString> {
+    let non_empty = |name| env::var_os(name).filter(|value| !value.is_empty());
+    if cfg!(windows)
+        && let Some(home) = non_empty("USERPROFILE")
+    {
+        return Some(home);
+    }
+    non_empty("HOME")
 }
 
 /// Renders a status line from a raw JSON payload received on `stdin`.

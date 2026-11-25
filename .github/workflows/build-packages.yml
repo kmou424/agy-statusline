@@ -53,8 +53,6 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: '1.100.0'
-          components: rustfmt, clippy
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
@@ -64,18 +62,28 @@ jobs:
         shell: bash
         run: |
           clang_rel="toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET}24-clang"
-          ndk="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
-          if [[ -z "$ndk" || ! -x "$ndk/$clang_rel" ]]; then
-            ndk="${ANDROID_NDK_HOME:-}"
+          candidates=()
+          if [[ -n "${ANDROID_NDK_LATEST_HOME:-}" ]]; then
+            candidates+=("$ANDROID_NDK_LATEST_HOME")
           fi
-          if [[ -z "$ndk" || ! -x "$ndk/$clang_rel" ]]; then
-            shopt -s nullglob
-            ndks=(/usr/local/lib/android/sdk/ndk/*/)
-            if (( ${#ndks[@]} )); then
-              ndk="$(printf '%s\n' "${ndks[@]%/}" | sort -V | tail -n 1)"
+          if [[ -n "${ANDROID_NDK_HOME:-}" ]]; then
+            candidates+=("$ANDROID_NDK_HOME")
+          fi
+          shopt -s nullglob
+          ndks=(/usr/local/lib/android/sdk/ndk/*/)
+          if (( ${#ndks[@]} )); then
+            while IFS= read -r dir; do
+              candidates+=("$dir")
+            done < <(printf '%s\n' "${ndks[@]%/}" | sort -Vr)
+          fi
+          ndk=""
+          for candidate in "${candidates[@]}"; do
+            if [[ -n "$candidate" && -x "$candidate/$clang_rel" ]]; then
+              ndk="$candidate"
+              break
             fi
-          fi
-          if [[ -z "$ndk" || ! -x "$ndk/$clang_rel" ]]; then
+          done
+          if [[ -z "$ndk" ]]; then
             printf 'Android NDK linker not found: %s\n' "$clang_rel" >&2
             exit 1
           fi
@@ -105,7 +113,7 @@ jobs:
           path: dist/${{ env.ARCHIVE }}
           if-no-files-found: error
           overwrite: true
-          retention-days: 1
+          retention-days: 3
 
   finalize:
     needs: build

@@ -61,8 +61,8 @@ try {
     Invoke-Expression ([IO.File]::ReadAllText($installer))
     if ([IO.File]::ReadAllText($binary) -cne 'stable') { throw 'Expected stable binary.' }
     $command = $binary
-    if ($command -match '\s') { $command = '"' + $command + '"' }
-    Assert-Settings $command $false
+    if ($command -match '[\s&()^%!;,=]') { $command = '"' + $command + '"' }
+    Assert-Settings $command $true
 
     $remoteScript = [scriptblock]::Create([IO.File]::ReadAllText($installer))
     & $remoteScript -Canary
@@ -79,7 +79,7 @@ try {
     $helpText = & $installer --help
     if ($helpText -notmatch '^Usage:') { throw 'Expected --help to print usage.' }
 
-    $custom = Join-Path $tmpDir 'dir with spaces'
+    $custom = Join-Path $tmpDir 'R&D tools'
     & $installer -Version 'v0.1.0' -InstallDir $custom --stack-with-default
     $customBinary = Join-Path $custom 'agy-statusline.exe'
     if ([IO.File]::ReadAllText($customBinary) -cne 'stable') { throw 'Expected custom binary.' }

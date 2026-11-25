@@ -11,6 +11,9 @@ param(
 & {
     Set-StrictMode -Version Latest
     $ErrorActionPreference = 'Stop'
+    if ($PSVersionTable.PSVersion.Major -lt 6) {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    }
 
     foreach ($arg in $ExtraArgs) {
         switch ($arg) {
@@ -64,18 +67,17 @@ param(
             $status = [pscustomobject]@{}
         }
         $command = $Binary
-        if ($command -match '\s') { $command = '"' + $command + '"' }
+        if ($command -match '[\s&()^%!;,=]') { $command = '"' + $command + '"' }
         $status | Add-Member -Force -NotePropertyMembers @{
             type = 'command'
             command = $command
             enabled = $true
         }
-        $status.PSObject.Properties.Remove('stack_with_default')
         if ($Stack) {
-            $status | Add-Member -NotePropertyName stack_with_default -NotePropertyValue $true
+            $status | Add-Member -Force -NotePropertyName stack_with_default -NotePropertyValue $true
         }
         $settings | Add-Member -Force -NotePropertyName statusLine -NotePropertyValue $status
-        $json = ConvertTo-Json -InputObject $settings -Depth 10
+        $json = ConvertTo-Json -InputObject $settings -Depth 100
         [void][IO.Directory]::CreateDirectory($settingsDir)
         $settingsTemp = Join-Path $settingsDir ('.settings.json.' + [Guid]::NewGuid())
         try {

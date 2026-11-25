@@ -104,11 +104,33 @@ fn shorten_home(cwd: &str, home: &str) -> Option<String> {
         return None;
     }
     let windows_path = drive_path || unc_path;
-    let normalized_cwd = windows_path.then(|| cwd.replace('\\', "/"));
-    let normalized_home = windows_path.then(|| home.replace('\\', "/"));
-    let relative = Path::new(normalized_cwd.as_deref().unwrap_or(cwd))
-        .strip_prefix(normalized_home.as_deref().unwrap_or(home))
-        .ok()?;
+    if windows_path {
+        let cwd_norm = cwd.replace('\\', "/");
+        let home_norm = home.replace('\\', "/");
+        let cwd_parts: Vec<&str> = cwd_norm
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect();
+        let home_parts: Vec<&str> = home_norm
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .collect();
+        if cwd_parts.len() < home_parts.len()
+            || !cwd_parts
+                .iter()
+                .zip(&home_parts)
+                .all(|(left, right)| left.eq_ignore_ascii_case(right))
+        {
+            return None;
+        }
+        let rest = &cwd_parts[home_parts.len()..];
+        return Some(if rest.is_empty() {
+            "~".to_owned()
+        } else {
+            format!("~/{}", rest.join("/"))
+        });
+    }
+    let relative = Path::new(cwd).strip_prefix(home).ok()?;
     Some(if relative.as_os_str().is_empty() {
         "~".to_owned()
     } else {

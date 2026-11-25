@@ -113,18 +113,47 @@ sha256() {
     fi
 }
 
+shell_quote() {
+    case "$1" in
+        ''|*[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./:~-]*)
+            printf "'"
+            printf '%s' "$1" | sed "s/'/'\\\\''/g"
+            printf "'"
+            ;;
+        *)
+            printf '%s' "$1"
+            ;;
+    esac
+}
+
+resolve_target_path() {
+    if [ -L "$1" ]; then
+        if command -v python3 >/dev/null 2>&1; then
+            python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"
+            return
+        elif command -v readlink >/dev/null 2>&1 && resolved=$(readlink -f "$1" 2>/dev/null); then
+            printf '%s\n' "$resolved"
+            return
+        fi
+    fi
+    printf '%s\n' "$1"
+}
+
 configure() {
     settings_dir=$HOME/.gemini/antigravity-cli
     settings=$settings_dir/settings.json
-    status_command=$bin_path
     if [ "$install_dir" = "$default_dir" ]; then
         # agy expands the tilde on each machine.
         status_command='~/.local/bin/agy-statusline'
+    else
+        status_command=$(shell_quote "$bin_path")
     fi
     source_json=/dev/null
+    target_settings=$settings
     if [ -e "$settings" ] || [ -L "$settings" ]; then
         [ -f "$settings" ] || die "Expected a settings file at $settings."
-        source_json=$settings
+        target_settings=$(resolve_target_path "$settings")
+        source_json=$target_settings
     fi
     if command -v python3 >/dev/null 2>&1; then
         editor=python3
@@ -140,8 +169,9 @@ configure() {
         editor=awk
     fi
 
-    mkdir -p "$settings_dir"
-    settings_tmp=$(mktemp "$settings_dir/.settings.json.XXXXXXXX")
+    target_dir=$(dirname "$target_settings")
+    mkdir -p "$target_dir"
+    settings_tmp=$(mktemp "$target_dir/.settings.json.XXXXXXXX")
     case "$editor" in
         python3)
             python3 - "$source_json" "$status_command" "$stack" > "$settings_tmp" <<'PY'
@@ -157,7 +187,6 @@ line = settings.get("statusLine")
 if not isinstance(line, dict):
     line = {}
 line.update(type="command", command=command, enabled=True)
-line.pop("stack_with_default", None)
 if stack == "true":
     line["stack_with_default"] = True
 settings["statusLine"] = line
@@ -173,7 +202,7 @@ PY
                 | .statusLine |= (
                     if type == "object" then . else {} end
                     | . + {type: "command", command: $command, enabled: true}
-                    | if $stack then .stack_with_default = true else del(.stack_with_default) end
+                    | if $stack then .stack_with_default = true else . end
                 )' "$source_json" > "$settings_tmp"
             ;;
         node)
@@ -186,7 +215,6 @@ const isObject = value => value !== null && typeof value === "object" && !Array.
 if (!isObject(settings)) throw new Error("settings.json must contain a JSON object");
 const existing = isObject(settings.statusLine) ? settings.statusLine : {};
 const line = { ...existing, type: "command", command, enabled: true };
-delete line.stack_with_default;
 if (stack === "true") line.stack_with_default = true;
 settings.statusLine = line;
 console.log(JSON.stringify(settings, null, 2));
@@ -212,7 +240,7 @@ JS
                 }' > "$settings_tmp"
             ;;
     esac
-    mv -f "$settings_tmp" "$settings"
+    mv -f "$settings_tmp" "$target_settings"
     settings_tmp=
 }
 

@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
+  cancel-in-progress: false
 
 jobs:
   lint:
@@ -25,9 +25,6 @@ jobs:
       - name: Install Linux linker dependencies
         run: sudo apt-get update && sudo apt-get install -y clang mold
       - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: '1.100.0'
-          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
@@ -48,9 +45,6 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y clang mold
       - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: '1.100.0'
-          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
 
@@ -104,8 +98,11 @@ jobs:
               exit 1
             fi
             printf 'mode=tag\nversion_label=%s\n' "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
-          else
+          elif [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
             printf 'mode=canary\nversion_label=canary\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'Release workflow only publishes from refs/heads/main or v* tags (got %s)\n' "$GITHUB_REF" >&2
+            exit 1
           fi
 
   package:
@@ -148,30 +145,34 @@ jobs:
             if [[ -n "$previous" ]]; then
               history+=("$previous..HEAD")
             fi
-            unix_install="sh scripts/install.sh --version $VERSION_LABEL"
-            windows_install="pwsh -File scripts/install.ps1 -Version $VERSION_LABEL"
+            unix_install="curl -fsSL https://raw.githubusercontent.com/kmou424/agy-statusline/main/scripts/install.sh | sh -s -- --version $VERSION_LABEL"
+            windows_install="& ([scriptblock]::Create((irm https://raw.githubusercontent.com/kmou424/agy-statusline/main/scripts/install.ps1))) -Version $VERSION_LABEL"
             if [[ "$VERSION_LABEL" == *-* ]]; then
               flags+=(--prerelease --latest=false)
             fi
           else
-            previous="$(git describe --tags --abbrev=0 --match 'v*' HEAD 2>/dev/null || true)"
+            previous="$(git tag --list 'v*' --merged HEAD --sort=-v:refname | grep -v '-' | head -n 1 || true)"
             if [[ -n "$previous" ]]; then
               history+=("$previous..HEAD")
             else
               history+=(-n 20)
             fi
             title="Canary (main @ $(git rev-parse --short HEAD))"
-            unix_install='sh scripts/install.sh --canary'
-            windows_install='pwsh -File scripts/install.ps1 -Canary'
+            unix_install='curl -fsSL https://raw.githubusercontent.com/kmou424/agy-statusline/main/scripts/install.sh | sh -s -- --canary'
+            windows_install='& ([scriptblock]::Create((irm https://raw.githubusercontent.com/kmou424/agy-statusline/main/scripts/install.ps1))) -Canary'
             flags+=(--prerelease --latest=false)
           fi
 
+          changes="$(git --no-pager log --no-merges --format='- %s (%h)' "${history[@]}" --)"
+          if [[ -z "$changes" ]]; then
+            changes="- No new commits since ${previous:-initial commit}."
+          fi
+
           {
-            printf 'Commit: `%s`\n\n## Changes\n\n' "$GITHUB_SHA"
-            git --no-pager log --no-merges --format='- %s (%h)' "${history[@]}" --
+            printf 'Commit: `%s`\n\n## Changes\n\n%s\n' "$GITHUB_SHA" "$changes"
             printf '\n## Checksums\n\n'
             printf 'Verify downloaded archives with `sha256sum -c SHA256SUMS`.\n'
-            printf '\n## Install\n\nFrom a checkout of this release:\n\n'
+            printf '\n## Install\n\n'
             printf -- '- Unix or Termux: `%s`\n- Windows: `%s`\n' "$unix_install" "$windows_install"
           } > notes.md
 
