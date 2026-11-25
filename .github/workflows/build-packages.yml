@@ -1,0 +1,136 @@
+name: Build packages
+
+on:
+  workflow_call:
+    inputs:
+      version_label:
+        type: string
+        required: true
+      artifact_retention_days:
+        type: number
+        default: 14
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            extension: tar.gz
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            extension: tar.gz
+          - target: aarch64-linux-android
+            os: ubuntu-latest
+            extension: tar.gz
+          - target: x86_64-linux-android
+            os: ubuntu-latest
+            extension: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-15
+            extension: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-15
+            extension: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            extension: zip
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            extension: zip
+    runs-on: ${{ matrix.os }}
+    env:
+      TARGET: ${{ matrix.target }}
+      ARCHIVE: agy-statusline-${{ inputs.version_label }}-${{ matrix.target }}.${{ matrix.extension }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.100.0'
+          components: rustfmt, clippy
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Configure Android API 24 linker
+        if: endsWith(matrix.target, '-linux-android')
+        shell: bash
+        run: |
+          clang_rel="toolchains/llvm/prebuilt/linux-x86_64/bin/${TARGET}24-clang"
+          ndk="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
+          if [[ -z "$ndk" || ! -x "$ndk/$clang_rel" ]]; then
+            ndk="${ANDROID_NDK_HOME:-}"
+          fi
+          if [[ -z "$ndk" || ! -x "$ndk/$clang_rel" ]]; then
+            shopt -s nullglob
+            ndks=(/usr/local/lib/android/sdk/ndk/*/)
+            if (( ${#ndks[@]} )); then
+              ndk="$(printf '%s\n' "${ndks[@]%/}" | sort -V | tail -n 1)"
+            fi
+          fi
+          if [[ -z "$ndk" || ! -x "$ndk/$clang_rel" ]]; then
+            printf 'Android NDK linker not found: %s\n' "$clang_rel" >&2
+            exit 1
+          fi
+          linker_var="CARGO_TARGET_${TARGET^^}_LINKER"
+          printf '%s=%s\n' "${linker_var//-/_}" "$ndk/$clang_rel" >> "$GITHUB_ENV"
+      - name: Build release binary
+        shell: bash
+        run: cargo build --locked --release --target "$TARGET"
+      - name: Create Unix archive
+        if: matrix.extension == 'tar.gz'
+        shell: bash
+        run: |
+          mkdir -p package dist
+          install -m 755 "target/$TARGET/release/agy-statusline" package/agy-statusline
+          cp README.md package/
+          COPYFILE_DISABLE=1 tar -czf "dist/$ARCHIVE" -C package agy-statusline README.md
+      - name: Create Windows archive
+        if: matrix.extension == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path package, dist | Out-Null
+          Copy-Item -LiteralPath "target/$env:TARGET/release/agy-statusline.exe", "README.md" -Destination package
+          Compress-Archive -LiteralPath "package/agy-statusline.exe", "package/README.md" -DestinationPath "dist/$env:ARCHIVE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-${{ matrix.target }}
+          path: dist/${{ env.ARCHIVE }}
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+
+  finalize:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          path: dist
+          merge-multiple: true
+      - name: Generate checksums
+        shell: bash
+        working-directory: dist
+        run: |
+          shopt -s nullglob
+          archives=(agy-statusline-*.tar.gz agy-statusline-*.zip)
+          if (( ${#archives[@]} != 8 )); then
+            printf 'Expected 8 archives, found %s\n' "${#archives[@]}" >&2
+            exit 1
+          fi
+          sha256sum agy-statusline-* | LC_ALL=C sort -k2 > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agy-statusline-${{ inputs.version_label }}
+          path: dist/
+          if-no-files-found: error
+          overwrite: true
+          retention-days: ${{ inputs.artifact_retention_days }}

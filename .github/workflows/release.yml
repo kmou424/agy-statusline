@@ -1,0 +1,203 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
+
+jobs:
+  lint:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Linux linker dependencies
+        run: sudo apt-get update && sudo apt-get install -y clang mold
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.100.0'
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+
+  test:
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install Linux linker dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang mold
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.100.0'
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked
+
+  installer-tests:
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Test POSIX installer
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == macOS ]] && ! command -v shellcheck >/dev/null; then
+            brew install shellcheck
+          fi
+          shellcheck -s sh scripts/install.sh
+          sh -n scripts/install.sh
+          bash -n scripts/install.sh
+          sh scripts/test-install.sh
+          bash scripts/test-install.sh
+      - name: Test PowerShell installer
+        if: runner.os == 'Windows'
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/test-install.ps1
+
+  meta:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    outputs:
+      mode: ${{ steps.release.outputs.mode }}
+      version_label: ${{ steps.release.outputs.version_label }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Resolve release mode and version
+        id: release
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" == v* ]]; then
+            cargo_version="$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')"
+            if [[ "$GITHUB_REF_NAME" != "v$cargo_version" ]]; then
+              printf 'Tag %s must match Cargo.toml version v%s\n' "$GITHUB_REF_NAME" "$cargo_version" >&2
+              exit 1
+            fi
+            printf 'mode=tag\nversion_label=%s\n' "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            printf 'mode=canary\nversion_label=canary\n' >> "$GITHUB_OUTPUT"
+          fi
+
+  package:
+    permissions:
+      contents: read
+    needs: [lint, test, installer-tests, meta]
+    uses: ./.github/workflows/build-packages.yml
+    with:
+      version_label: ${{ needs.meta.outputs.version_label }}
+      artifact_retention_days: ${{ needs.meta.outputs.mode == 'tag' && 90 || 14 }}
+
+  publish:
+    needs: [meta, package]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: agy-statusline-${{ needs.meta.outputs.version_label }}
+          path: dist
+      - name: Verify release assets
+        working-directory: dist
+        run: sha256sum --strict --check SHA256SUMS
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          MODE: ${{ needs.meta.outputs.mode }}
+          VERSION_LABEL: ${{ needs.meta.outputs.version_label }}
+        run: |
+          history=()
+          flags=()
+          title="$VERSION_LABEL"
+          if [[ "$MODE" == tag ]]; then
+            previous="$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || true)"
+            if [[ -n "$previous" ]]; then
+              history+=("$previous..HEAD")
+            fi
+            unix_install="sh scripts/install.sh --version $VERSION_LABEL"
+            windows_install="pwsh -File scripts/install.ps1 -Version $VERSION_LABEL"
+            if [[ "$VERSION_LABEL" == *-* ]]; then
+              flags+=(--prerelease --latest=false)
+            fi
+          else
+            previous="$(git describe --tags --abbrev=0 --match 'v*' HEAD 2>/dev/null || true)"
+            if [[ -n "$previous" ]]; then
+              history+=("$previous..HEAD")
+            else
+              history+=(-n 20)
+            fi
+            title="Canary (main @ $(git rev-parse --short HEAD))"
+            unix_install='sh scripts/install.sh --canary'
+            windows_install='pwsh -File scripts/install.ps1 -Canary'
+            flags+=(--prerelease --latest=false)
+          fi
+
+          {
+            printf 'Commit: `%s`\n\n## Changes\n\n' "$GITHUB_SHA"
+            git --no-pager log --no-merges --format='- %s (%h)' "${history[@]}" --
+            printf '\n## Checksums\n\n'
+            printf 'Verify downloaded archives with `sha256sum -c SHA256SUMS`.\n'
+            printf '\n## Install\n\nFrom a checkout of this release:\n\n'
+            printf -- '- Unix or Termux: `%s`\n- Windows: `%s`\n' "$unix_install" "$windows_install"
+          } > notes.md
+
+          if [[ "$MODE" == canary ]]; then
+            git tag -f canary "$GITHUB_SHA"
+            git push -f origin refs/tags/canary
+          fi
+
+          if ! gh release view "$VERSION_LABEL" >/dev/null 2>&1; then
+            if gh release create "$VERSION_LABEL" dist/* --verify-tag \
+              --title "$title" --notes-file notes.md "${flags[@]}"; then
+              exit 0
+            fi
+            gh release view "$VERSION_LABEL" >/dev/null
+          fi
+
+          if [[ "$MODE" == canary ]]; then
+            assets="$(gh release view "$VERSION_LABEL" --json assets --jq '.assets[].name')"
+            while IFS= read -r asset; do
+              if [[ -n "$asset" && ( "$asset" == */* || ! -f "dist/$asset" ) ]]; then
+                gh release delete-asset --yes -- "$VERSION_LABEL" "$asset"
+              fi
+            done <<< "$assets"
+          elif [[ "$VERSION_LABEL" != *-* ]]; then
+            flags+=(--prerelease=false)
+          fi
+          gh release upload "$VERSION_LABEL" dist/* --clobber
+          gh release edit "$VERSION_LABEL" --draft=false \
+            --title "$title" --notes-file notes.md "${flags[@]}"
