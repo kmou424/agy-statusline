@@ -28,6 +28,11 @@ build-fast *args:
 build-release *args:
     cargo build --release {{args}}
 
+# Build and install release binary into ~/.local/bin
+install dest="$HOME/.local/bin": build-release
+    mkdir -p "{{dest}}"
+    install -m 755 target/release/agy-statusline "{{dest}}/agy-statusline"
+
 # Run binary via Blaze
 run *args:
     blaze run -- {{args}}
