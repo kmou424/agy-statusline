@@ -28,6 +28,10 @@ build-fast *args:
 build-release *args:
     cargo build --release {{args}}
 
+# Build an optimized release binary for an explicit target
+build-target target:
+    cargo build --release --target {{target}}
+
 # Build and install release binary into ~/.local/bin
 install dest="$HOME/.local/bin": build-release
     mkdir -p "{{dest}}"

@@ -15,6 +15,21 @@ use layout::{FooterData, FooterOptions, MAX_TERMINAL_WIDTH, build_footer_lines};
 use probes::{GitBranch, GitStatus, RuntimeInfo, git_from_vcs, probe_git, probe_runtime};
 use theme::{Palette, load_agy_color_scheme};
 
+fn resolve_home_dir_with(
+    is_windows: bool,
+    get_env: impl Fn(&str) -> Option<String>,
+) -> Option<String> {
+    let non_empty = |name| get_env(name).filter(|value| !value.is_empty());
+    if is_windows && let Some(home) = non_empty("USERPROFILE") {
+        return Some(home);
+    }
+    non_empty("HOME")
+}
+
+fn home_dir() -> Option<String> {
+    resolve_home_dir_with(cfg!(windows), |name| env::var(name).ok())
+}
+
 /// Renders a status line from a raw JSON payload received on `stdin`.
 #[must_use]
 pub fn render_statusline(raw: &str) -> String {
@@ -24,7 +39,7 @@ pub fn render_statusline(raw: &str) -> String {
     }
     let palette = Palette::for_scheme(load_agy_color_scheme());
     let mode = IconMode::Auto.resolve();
-    let home = env::var("HOME").ok();
+    let home = home_dir();
     let dir = input.active_dir().map(Path::new).filter(|dir| dir.is_dir());
     let (git, runtime) = dir
         .map(|dir| {
@@ -107,4 +122,49 @@ fn cache_hit_rate(usage: &CurrentUsage) -> Option<f64> {
         + usage.cache_creation_input_tokens.unwrap_or(0) as f64
         + read;
     (prompt_input > 0.0).then(|| 100.0 * read / prompt_input)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_home_dir_with;
+
+    #[test]
+    fn windows_home_prefers_userprofile_and_falls_back_to_home() {
+        for (profile, home, expected) in [
+            (
+                Some(r"C:\Users\alice"),
+                Some("/home/alice"),
+                Some(r"C:\Users\alice"),
+            ),
+            (None, Some("/home/alice"), Some("/home/alice")),
+            (Some(""), Some("/home/alice"), Some("/home/alice")),
+            (Some(""), Some(""), None),
+            (None, None, None),
+        ] {
+            let resolved = resolve_home_dir_with(true, |name| {
+                match name {
+                    "USERPROFILE" => profile,
+                    "HOME" => home,
+                    _ => panic!("unexpected variable: {name}"),
+                }
+                .map(str::to_owned)
+            });
+            assert_eq!(resolved.as_deref(), expected);
+        }
+    }
+
+    #[test]
+    fn unix_home_reads_only_non_empty_home() {
+        for (home, expected) in [
+            (Some("/home/alice"), Some("/home/alice")),
+            (Some(""), None),
+            (None, None),
+        ] {
+            let resolved = resolve_home_dir_with(false, |name| {
+                assert_eq!(name, "HOME");
+                home.map(str::to_owned)
+            });
+            assert_eq!(resolved.as_deref(), expected);
+        }
+    }
 }

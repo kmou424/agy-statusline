@@ -420,6 +420,7 @@ fn binary_omits_sensitive_fields_from_the_official_payload() {
 fn run_binary(raw: &str) -> std::process::Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_agy-statusline"))
         .env_remove("HOME")
+        .env_remove("USERPROFILE")
         .env_remove("HERDR_ENV")
         .env_remove("TERM")
         .env_remove("WT_SESSION")

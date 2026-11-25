@@ -1,6 +1,14 @@
-[target.'cfg(target_os = "linux")']
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))']
 linker = "clang"
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
+
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = ["-C", "linker-flavor=ld.lld"]
+
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = ["-C", "linker-flavor=ld.lld"]
 
 # Homebrew mold 3.0.0 ships ELF-only linking; macOS uses Apple ld by default.
 # Once a mold release with ld64.mold (Mach-O) is installed, macOS builds can opt in via:

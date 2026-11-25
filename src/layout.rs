@@ -89,6 +89,33 @@ fn align(left: &str, right: &str, width: usize) -> String {
     format!("{left}{:gap$}{right}", "")
 }
 
+fn shorten_home(cwd: &str, home: &str) -> Option<String> {
+    let has_drive_root = |path: &str| {
+        matches!(
+            path.as_bytes(),
+            [b'A'..=b'Z' | b'a'..=b'z', b':', b'\\' | b'/', ..]
+        )
+    };
+    let drive_path = has_drive_root(home);
+    let unc_path = home.starts_with(r"\\");
+    if (drive_path && !has_drive_root(cwd))
+        || (unc_path && !cwd.starts_with(r"\\") && !cwd.starts_with("//"))
+    {
+        return None;
+    }
+    let windows_path = drive_path || unc_path;
+    let normalized_cwd = windows_path.then(|| cwd.replace('\\', "/"));
+    let normalized_home = windows_path.then(|| home.replace('\\', "/"));
+    let relative = Path::new(normalized_cwd.as_deref().unwrap_or(cwd))
+        .strip_prefix(normalized_home.as_deref().unwrap_or(home))
+        .ok()?;
+    Some(if relative.as_os_str().is_empty() {
+        "~".to_owned()
+    } else {
+        format!("~/{}", relative.display())
+    })
+}
+
 fn cwd_part(raw: &str, home: Option<&str>, g: &Glyphs, palette: &Palette) -> Option<Part> {
     let cleaned_raw = clean(raw);
     if cleaned_raw.is_empty() {
@@ -96,14 +123,7 @@ fn cwd_part(raw: &str, home: Option<&str>, g: &Glyphs, palette: &Palette) -> Opt
     }
     let text = home
         .filter(|home| !home.is_empty())
-        .and_then(|home| Path::new(&cleaned_raw).strip_prefix(home).ok())
-        .map(|relative| {
-            if relative.as_os_str().is_empty() {
-                "~".to_owned()
-            } else {
-                format!("~/{}", relative.display())
-            }
-        })
+        .and_then(|home| shorten_home(&cleaned_raw, home))
         .unwrap_or(cleaned_raw);
     let compact = Path::new(&text)
         .file_name()
@@ -445,6 +465,54 @@ pub fn build_footer_lines(
 mod tests {
     use super::*;
     use crate::theme::ColorScheme;
+
+    #[test]
+    fn cwd_part_shortens_windows_home_by_component() {
+        let g = Glyphs::for_mode(ResolvedIconMode::Ascii);
+        let palette = Palette::for_scheme(ColorScheme::Terminal);
+        for (home, cwd, expected) in [
+            (r"C:\Users\alice", r"C:\Users\alice", "~"),
+            (r"C:\Users\alice", r"C:\Users\alice\repo", "~/repo"),
+            (r"C:\Users\alice", r"C:\Users/alice\work\app", "~/work/app"),
+            (r"C:\Users\alice", r"C:\Users\alice2", r"C:\Users\alice2"),
+            (
+                r"\\server\share\alice",
+                r"\\server\share\alice\repo",
+                "~/repo",
+            ),
+            (
+                r"\\server\share\alice",
+                "/server/share/alice",
+                "/server/share/alice",
+            ),
+        ] {
+            let part = cwd_part(cwd, Some(home), g, &palette).unwrap();
+            assert_eq!(
+                part.text,
+                format!(
+                    "{} {}",
+                    palette.fg(MdLink, g.cwd),
+                    palette.fg(Accent, expected)
+                )
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn cwd_part_preserves_unix_backslashes() {
+        let g = Glyphs::for_mode(ResolvedIconMode::Ascii);
+        let palette = Palette::for_scheme(ColorScheme::Terminal);
+        let part = cwd_part(r"/home/alice/work\app", Some("/home/alice"), g, &palette).unwrap();
+        assert_eq!(
+            part.text,
+            format!(
+                "{} {}",
+                palette.fg(MdLink, g.cwd),
+                palette.fg(Accent, r"~/work\app")
+            )
+        );
+    }
 
     #[test]
     fn alignment_right_wins_and_wide_left_cells_leave_padding() {

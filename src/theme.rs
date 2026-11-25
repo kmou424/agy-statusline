@@ -1,6 +1,8 @@
-use std::{env, fs, path::Path};
+use std::{fs, path::Path};
 
 use serde::Deserialize;
+
+use crate::home_dir;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColorRole {
@@ -61,13 +63,11 @@ pub fn load_agy_color_scheme_from_path(path: &Path) -> ColorScheme {
 }
 
 pub fn load_agy_color_scheme() -> ColorScheme {
-    env::var_os("HOME")
-        .filter(|home| !home.is_empty())
-        .map_or(ColorScheme::Terminal, |home| {
-            load_agy_color_scheme_from_path(
-                &Path::new(&home).join(".gemini/antigravity-cli/settings.json"),
-            )
-        })
+    home_dir().map_or(ColorScheme::Terminal, |home| {
+        load_agy_color_scheme_from_path(
+            &Path::new(&home).join(".gemini/antigravity-cli/settings.json"),
+        )
+    })
 }
 
 pub struct Palette {
