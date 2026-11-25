@@ -106,7 +106,21 @@ Deliver automated CI/CD, cross-platform packaging, and companion installer scrip
 
 ## Checklist
 
-- [ ] `01-cross-platform-build`: Cross-platform home resolution, release profile optimization, and local cross-build alignment
-- [ ] `02-ci-workflow`: GitHub Actions CI workflow (lint, Linux/macOS/Windows tests without Blaze, CI artifact uploads)
-- [ ] `03-cd-release-and-canary`: Reusable 8-target packaging matrix, `v*` tag Release with Git history collection, and rolling `canary` pre-release on `main`
-- [ ] `04-installer-scripts`: POSIX `sh`/`bash` installer (`scripts/install.sh`), Windows PowerShell installer (`scripts/install.ps1`), automated installer tests, and `README.md` updates
+- [x] `01-cross-platform-build`: Cross-platform home resolution, release profile optimization, and local cross-build alignment
+- [x] `02-ci-workflow`: GitHub Actions CI workflow (lint, Linux/macOS/Windows tests without Blaze, CI artifact uploads)
+- [x] `03-cd-release-and-canary`: Reusable 8-target packaging matrix, `v*` tag Release with Git history collection, and rolling `canary` pre-release on `main`
+- [x] `04-installer-scripts`: POSIX `sh`/`bash` installer (`scripts/install.sh`), Windows PowerShell installer (`scripts/install.ps1`), automated installer tests, and `README.md` updates
+
+## Result
+
+Shipped on `main` in commits `5597b6e`, `8bf0303`, `c6f454c`, `11aab3b`, and `ecd7bf4`, and verified live on GitHub Actions (`https://github.com/kmou424/agy-statusline/actions/runs/45595573495`) on `2026-11-25`.
+
+- **What shipped**:
+  - Cross-platform home directory resolution (`USERPROFILE` with `HOME` fallback on Windows, `OsString` preserved for `settings.json`, case-insensitive Windows home shortening), `[profile.release]` (`lto = "thin"`, `codegen-units = 1`, `strip = "symbols"`), and GNU-Linux-scoped `mold` vs `rust-lld` Linux `musl` linker configuration.
+  - Multi-OS pinned-Rust Cargo CI/CD workflows (`.github/workflows/ci.yml`, `.github/workflows/build-packages.yml`, `.github/workflows/release.yml`, without `blaze`) reading the pinned channel directly from `rust-toolchain.toml`, building all 8 targets (Linux `musl` x86_64/aarch64, macOS arm64/x86_64, Android NDK API 24 arm64/x86_64, Windows MSVC x86_64/arm64), uploading `.tar.gz`/`.zip` + `SHA256SUMS` as CI Artifacts on every build, and updating the rolling `canary` pre-release on `main` pushes.
+  - POSIX `sh`/`bash` installer (`scripts/install.sh`, ShellCheck-clean), Windows PowerShell installer (`scripts/install.ps1` with PowerShell 5.1 TLS 1.2 + `-Depth 100` JSON preservation + `cmd /c`-safe quoting), offline fixture tests (`scripts/test-install.sh`, `scripts/test-install.ps1`), and updated `README.md`.
+- **Verification**:
+  - Live GitHub Actions `Release` run `45595573495` succeeded across `lint`, 3-OS `test`, 3-OS `installer-tests` (including `shellcheck -s sh` and Windows `pwsh`), all 8 cross-build targets, `package / finalize` (`SHA256SUMS` + CI Artifact `agy-statusline-canary`), and `publish` (`https://github.com/kmou424/agy-statusline/releases/tag/canary`).
+  - Live end-to-end installer smoke test (`sh scripts/install.sh --canary --no-configure --install-dir /tmp/agy-canary-smoke`) downloaded, SHA-256 verified, installed, and executed the published `canary` binary on macOS arm64.
+  - Note: The `v*` tag release publish path is verified structurally and via local simulation; its first live GitHub publish executes when the first `v*` tag (e.g., `v0.1.0`) is pushed.
+
