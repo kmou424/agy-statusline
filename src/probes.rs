@@ -242,7 +242,13 @@ pub fn probe_git(
         .is_none_or(|kind| kind == "git")
         && let Some(text) = run_command_with_timeout(
             "git",
-            &["status", "--porcelain=v2", "--branch", "--show-stash"],
+            &[
+                "--no-optional-locks",
+                "status",
+                "--porcelain=v2",
+                "--branch",
+                "--show-stash",
+            ],
             dir,
             timeout,
         )

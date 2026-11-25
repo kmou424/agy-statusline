@@ -105,6 +105,64 @@ fn uses_vcs_fallback_outside_a_repo_and_prefers_real_git_status_inside() {
 }
 
 #[test]
+fn git_probe_avoids_optional_index_locks() {
+    let dir = TestDir::new();
+    let timeout = Duration::from_secs(2);
+    run_command_with_timeout(
+        "git",
+        &["init", "--initial-branch=main"],
+        dir.path(),
+        timeout,
+    )
+    .unwrap();
+    dir.write("tracked.txt", "hello\n");
+    run_command_with_timeout("git", &["add", "tracked.txt"], dir.path(), timeout).unwrap();
+    run_command_with_timeout(
+        "git",
+        &[
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "init",
+        ],
+        dir.path(),
+        timeout,
+    )
+    .unwrap();
+
+    // Probe must still succeed without contending when another git process holds index.lock.
+    let lock_path = dir.path().join(".git/index.lock");
+    fs::write(&lock_path, "held").unwrap();
+    let (branch, git) = probe_git(dir.path(), None, timeout).unwrap();
+    assert_eq!(branch, Some(GitBranch::Named("main".into())));
+    assert_eq!(git.modified, 0);
+    assert_eq!(fs::read_to_string(&lock_path).unwrap(), "held");
+    fs::remove_file(&lock_path).unwrap();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        let index_path = dir.path().join(".git/index");
+        let before_ino = fs::metadata(&index_path).unwrap().ino();
+        run_command_with_timeout(
+            "touch",
+            &["-t", "202001010000", "tracked.txt"],
+            dir.path(),
+            timeout,
+        )
+        .unwrap();
+        let (branch, git) = probe_git(dir.path(), None, timeout).unwrap();
+        assert_eq!(branch, Some(GitBranch::Named("main".into())));
+        assert_eq!(git.modified, 0);
+        assert_eq!(fs::metadata(&index_path).unwrap().ino(), before_ino);
+    }
+}
+
+#[test]
 fn detects_runtime_and_framework_in_catalog_order() {
     let dir = TestDir::new();
     dir.write("vite.config.ts", "");
