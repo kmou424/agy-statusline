@@ -144,6 +144,7 @@ configure() {
     settings=$settings_dir/settings.json
     if [ "$install_dir" = "$default_dir" ]; then
         # agy expands the tilde on each machine.
+        # shellcheck disable=SC2088
         status_command='~/.local/bin/agy-statusline'
     else
         status_command=$(shell_quote "$bin_path")
@@ -166,7 +167,7 @@ configure() {
             "$status_command" >&2
         return
     else
-        editor=awk
+        editor='awk'
     fi
 
     target_dir=$(dirname "$target_settings")
@@ -304,8 +305,9 @@ main() {
     elif [ -n "$version" ]; then
         tag=$version
     else
-        tag=$(latest_tag) && valid_tag "$tag" ||
+        if ! tag=$(latest_tag) || ! valid_tag "$tag"; then
             die 'Could not find a stable release. Try --canary.'
+        fi
     fi
     archive=agy-statusline-$tag-$target.tar.gz
     base=${AGY_STATUSLINE_RELEASE_BASE_URL:-$repo/releases/download}

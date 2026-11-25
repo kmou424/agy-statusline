@@ -1,10 +1,11 @@
+[CmdletBinding(PositionalBinding = $false)]
 param(
-    [Alias('-canary')][switch]$Canary,
+    [switch]$Canary,
     [string]$Version = '',
     [string]$InstallDir = '',
-    [Alias('-no-configure')][switch]$NoConfigure,
-    [Alias('-stack-with-default')][switch]$StackWithDefault,
-    [Alias('-help', 'h')][switch]$Help,
+    [switch]$NoConfigure,
+    [switch]$StackWithDefault,
+    [Alias('h')][switch]$Help,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$ExtraArgs
 )
 
