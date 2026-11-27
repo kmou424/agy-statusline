@@ -6,6 +6,9 @@ pub mod layout;
 pub mod probes;
 pub mod text;
 pub mod theme;
+pub mod title;
+
+pub use title::{render_title, render_title_from_input};
 
 use std::{env, ffi::OsString, path::Path, thread, time::Duration};
 
