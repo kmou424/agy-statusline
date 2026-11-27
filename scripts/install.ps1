@@ -4,6 +4,7 @@ param(
     [string]$Version = '',
     [string]$InstallDir = '',
     [switch]$NoConfigure,
+    [switch]$NoTitle,
     [switch]$StackWithDefault,
     [Alias('h')][switch]$Help,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$ExtraArgs
@@ -20,13 +21,14 @@ param(
         switch ($arg) {
             '--canary' { $Canary = $true }
             '--no-configure' { $NoConfigure = $true }
+            '--no-title' { $NoTitle = $true }
             '--stack-with-default' { $StackWithDefault = $true }
             '--help' { $Help = $true }
             default { throw "Unknown option: $arg (see --help)" }
         }
     }
     if ($Help) {
-        Write-Output 'Usage: install.ps1 [-Canary | -Version TAG] [-InstallDir DIR] [-NoConfigure] [-StackWithDefault]'
+        Write-Output 'Usage: install.ps1 [-Canary | -Version TAG] [-InstallDir DIR] [-NoConfigure] [-NoTitle] [-StackWithDefault]'
         return
     }
     if ($Canary -and $Version) { throw 'Choose either -Canary or -Version.' }
@@ -48,7 +50,20 @@ param(
         }
     }
 
-    function Set-StatusLine($Binary, $Stack) {
+    function Test-TitleSupport($ReleaseTag) {
+        if ($ReleaseTag -ceq 'canary') { return $true }
+        if ($ReleaseTag -cnotmatch '\Av([0-9]+)\.([0-9]+)(?:\.([0-9]+))?(?:[-+].*)?\z') {
+            return $false
+        }
+
+        $major = $Matches[1].TrimStart([char]'0')
+        $minor = $Matches[2].TrimStart([char]'0')
+        $patch = ([string]$Matches[3]).TrimStart([char]'0')
+        return ($major -ne '' -or ($minor -ne '' -and $minor -ne '1') -or
+            ($minor -eq '1' -and $patch -ne '' -and $patch -ne '1'))
+    }
+
+    function Set-StatusLine($Binary, $Stack, [bool]$ConfigureTitle) {
         $profileHome = $env:AGY_STATUSLINE_HOME
         if (!$profileHome) { $profileHome = $env:USERPROFILE }
         if (!$profileHome) { $profileHome = $HOME }
@@ -78,6 +93,21 @@ param(
             $status | Add-Member -Force -NotePropertyName stack_with_default -NotePropertyValue $true
         }
         $settings | Add-Member -Force -NotePropertyName statusLine -NotePropertyValue $status
+        if ($ConfigureTitle) {
+            $titleCommand = "$command title"
+            $previous = $settings.PSObject.Properties['title']
+            if ($null -ne $previous -and $previous.Value -is [pscustomobject]) {
+                $title = $previous.Value
+            } else {
+                $title = [pscustomobject]@{}
+            }
+            $title | Add-Member -Force -NotePropertyMembers @{
+                type = 'command'
+                command = $titleCommand
+                enabled = $true
+            }
+            $settings | Add-Member -Force -NotePropertyName title -NotePropertyValue $title
+        }
         $json = ConvertTo-Json -InputObject $settings -Depth 100
         [void][IO.Directory]::CreateDirectory($settingsDir)
         $settingsTemp = Join-Path $settingsDir ('.settings.json.' + [Guid]::NewGuid())
@@ -153,7 +183,14 @@ param(
         $binaryTemp = Join-Path $InstallDir ('.agy-statusline.' + [Guid]::NewGuid())
         [IO.File]::Copy($payload, $binaryTemp)
         Move-IntoPlace $binaryTemp $binary
-        if (!$NoConfigure) { Set-StatusLine $binary $StackWithDefault }
+        if (!$NoConfigure) {
+            $configureTitle = !$NoTitle
+            if ($configureTitle -and !(Test-TitleSupport $tag)) {
+                $configureTitle = $false
+                [Console]::Error.WriteLine("agy-statusline: Skipping title configuration ($tag does not include the title subcommand).")
+            }
+            Set-StatusLine $binary $StackWithDefault $configureTitle
+        }
         Write-Output "Installed $tag to $binary"
     } finally {
         if ($binaryTemp) { [IO.File]::Delete($binaryTemp) }

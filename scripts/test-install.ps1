@@ -7,7 +7,7 @@ $fixtureEnv = @{
     LOCALAPPDATA = (Join-Path $tmpDir 'local')
     AGY_STATUSLINE_HOME = (Join-Path $tmpDir 'home')
     AGY_STATUSLINE_RELEASE_BASE_URL = ([Uri](Join-Path $tmpDir 'releases')).AbsoluteUri
-    AGY_STATUSLINE_LATEST_TAG = 'v0.1.0'
+    AGY_STATUSLINE_LATEST_TAG = 'v0.1.2'
     AGY_STATUSLINE_ARCH = 'AMD64'
 }
 $savedEnv = @{}
@@ -48,42 +48,96 @@ function Assert-Settings($Command, [bool]$Stack) {
     if (!$Stack -and $null -ne $stacked) { throw 'Expected stack_with_default to be omitted.' }
 }
 
+function Assert-Title($Command) {
+    $data = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($settings))
+    $title = $data.title
+    if ($title.type -cne 'command' -or $title.command -cne $Command -or
+        $title.enabled -ne $true -or $title.prefix -cne 'keep') {
+        throw 'Unexpected title configuration.'
+    }
+}
+
+function Get-TitleJson {
+    $data = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($settings))
+    ConvertTo-Json -InputObject $data.title -Depth 100 -Compress
+}
+
 try {
     foreach ($key in $fixtureEnv.Keys) {
         [Environment]::SetEnvironmentVariable($key, $fixtureEnv[$key])
     }
     [void][IO.Directory]::CreateDirectory($payloadDir)
     [void][IO.Directory]::CreateDirectory($settingsDir)
-    [IO.File]::WriteAllText($settings, '{"other":{"theme":"test","values":[3,true]},"statusLine":{"enabled":false,"padding":2,"stack_with_default":true}}')
-    New-MockRelease 'v0.1.0' 'stable'
+    [IO.File]::WriteAllText($settings, '{"other":{"theme":"test","values":[3,true]},"statusLine":{"enabled":false,"padding":2,"stack_with_default":true},"title":{"prefix":"keep","enabled":false}}')
+    New-MockRelease 'v0.1.2' 'stable'
     New-MockRelease 'canary' 'canary'
+    New-MockRelease 'v0.1.1' 'legacy'
 
     Invoke-Expression ([IO.File]::ReadAllText($installer))
     if ([IO.File]::ReadAllText($binary) -cne 'stable') { throw 'Expected stable binary.' }
     $command = $binary
     if ($command -match '[\s&()^%!;,=]') { $command = '"' + $command + '"' }
     Assert-Settings $command $true
+    Assert-Title "$command title"
 
     $remoteScript = [scriptblock]::Create([IO.File]::ReadAllText($installer))
     & $remoteScript -Canary
     if ([IO.File]::ReadAllText($binary) -cne 'canary') { throw 'Expected canary binary.' }
     $untouched = [IO.File]::ReadAllText($settings)
-    & $installer -Version 'v0.1.0' -NoConfigure
-    if ([IO.File]::ReadAllText($binary) -cne 'stable') { throw 'Expected the requested stable tag.' }
     $unconfigured = Join-Path $tmpDir 'unconfigured'
+    $unconfiguredBinary = Join-Path $unconfigured 'agy-statusline.exe'
+    & $installer -Version 'v0.1.2' -InstallDir $unconfigured -NoConfigure
+    if ([IO.File]::ReadAllText($unconfiguredBinary) -cne 'stable') { throw 'Expected the requested stable tag.' }
+    if ([IO.File]::ReadAllText($settings) -cne $untouched) { throw 'Expected -NoConfigure to preserve settings.' }
     & $installer --canary --no-configure -InstallDir $unconfigured
-    if ([IO.File]::ReadAllText((Join-Path $unconfigured 'agy-statusline.exe')) -cne 'canary') {
+    if ([IO.File]::ReadAllText($unconfiguredBinary) -cne 'canary') {
         throw 'Expected --canary to select canary.'
     }
-    if ([IO.File]::ReadAllText($settings) -cne $untouched) { throw 'Expected settings to stay unchanged.' }
+    if ([IO.File]::ReadAllText($settings) -cne $untouched) { throw 'Expected --no-configure to preserve settings.' }
     $helpText = & $installer --help
-    if ($helpText -notmatch '^Usage:') { throw 'Expected --help to print usage.' }
+    if ($helpText -notmatch '^Usage:.*\[-NoTitle\]') { throw 'Expected --help to list -NoTitle.' }
+
+    $legacy = Join-Path $tmpDir 'legacy tools'
+    $legacyBinary = Join-Path $legacy 'agy-statusline.exe'
+    $titleBeforeLegacy = Get-TitleJson
+    $stderr = [Console]::Error
+    $legacyError = [IO.StringWriter]::new()
+    try {
+        [Console]::SetError($legacyError)
+        & $installer -Version 'v0.1.1' -InstallDir $legacy
+    } finally {
+        [Console]::SetError($stderr)
+    }
+    if ([IO.File]::ReadAllText($legacyBinary) -cne 'legacy') { throw 'Expected legacy binary.' }
+    Assert-Settings ('"' + $legacyBinary + '"') $true
+    if ((Get-TitleJson) -cne $titleBeforeLegacy) { throw 'Expected a legacy install to preserve title.' }
+    $legacyNotice = 'agy-statusline: Skipping title configuration (v0.1.1 does not include the title subcommand).'
+    if ($legacyError.ToString() -cne ($legacyNotice + [Environment]::NewLine)) {
+        throw 'Expected a legacy title skip diagnostic on stderr.'
+    }
 
     $custom = Join-Path $tmpDir 'R&D tools'
-    & $installer -Version 'v0.1.0' -InstallDir $custom --stack-with-default
+    & $installer -Version 'v0.1.2' -InstallDir $custom --stack-with-default
     $customBinary = Join-Path $custom 'agy-statusline.exe'
     if ([IO.File]::ReadAllText($customBinary) -cne 'stable') { throw 'Expected custom binary.' }
-    Assert-Settings ('"' + $customBinary + '"') $true
+    $customCommand = '"' + $customBinary + '"'
+    Assert-Settings $customCommand $true
+    Assert-Title ('"' + $customBinary + '" title')
+
+    $data = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($settings))
+    $data.title.command = 'custom-title'
+    $data.title.enabled = $false
+    [IO.File]::WriteAllText($settings, (ConvertTo-Json -InputObject $data -Depth 100))
+    $customTitle = Get-TitleJson
+
+    & $installer -NoTitle
+    Assert-Settings $command $true
+    if ((Get-TitleJson) -cne $customTitle) { throw 'Expected -NoTitle to preserve title.' }
+
+    & $installer --no-title -InstallDir $custom
+    Assert-Settings $customCommand $true
+    if ((Get-TitleJson) -cne $customTitle) { throw 'Expected --no-title to preserve title.' }
+
     $original = [IO.File]::ReadAllText($settings)
 
     $archive = "agy-statusline-canary-$target.zip"

@@ -4,6 +4,8 @@ Custom status line renderer for Antigravity CLI (`agy`), written in Rust.
 
 Reads `agy`'s `statusLine` JSON payload from `stdin` and renders a `wow-pi`-aligned two-row status line (working directory, Git branch/status, local runtime/framework, 12-cell context bar, model/effort identity, active `agy` mode badges, and token/cache/cost usage) with terminal-width adaptation and `agy` `colorScheme`-aware ANSI styling.
 
+The built-in `agy-statusline title` subcommand renders `[<dir_name>] <session_title>` as `agy`'s dynamic terminal window title.
+
 ## Prerequisites for local development
 
 - Rust toolchain pinned in [rust-toolchain.toml](./rust-toolchain.toml) (`1.100.0`, with `rustfmt` and `clippy`)
@@ -37,7 +39,7 @@ Canary:
 & ([scriptblock]::Create((irm https://raw.githubusercontent.com/kmou424/agy-statusline/main/scripts/install.ps1))) -Canary
 ```
 
-The installers configure `agy` automatically. Use `--no-configure` or `-NoConfigure` to install just the binary.
+The installers configure both `statusLine` and `title` automatically. Use `--no-title` or `-NoTitle` to skip `title`, or `--no-configure` or `-NoConfigure` to skip all `settings.json` edits.
 
 ### Build and install locally
 
@@ -60,6 +62,11 @@ Or configure `~/.gemini/antigravity-cli/settings.json` directly:
   "statusLine": {
     "type": "command",
     "command": "~/.local/bin/agy-statusline",
+    "enabled": true
+  },
+  "title": {
+    "type": "command",
+    "command": "~/.local/bin/agy-statusline title",
     "enabled": true
   }
 }

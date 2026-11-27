@@ -5,7 +5,7 @@ repo=https://github.com/kmou424/agy-statusline
 
 usage() {
     printf '%s\n' 'Usage: install.sh [--canary | --version TAG] [--install-dir DIR]' \
-        '                  [--no-configure] [--stack-with-default]' \
+        '                  [--no-configure] [--no-title] [--stack-with-default]' \
         'Installs the latest stable release by default.'
 }
 
@@ -20,6 +20,33 @@ valid_tag() {
         v[0123456789]*) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+supports_title_tag() {
+    [ "$1" != canary ] || return 0
+    version_core=${1%%[-+]*}
+    case "$version_core" in
+        v*.*) version_core=${version_core#v} ;;
+        *) return 1 ;;
+    esac
+    major=${version_core%%.*}
+    minor_patch=${version_core#*.}
+    minor=${minor_patch%%.*}
+    patch=0
+    case "$minor_patch" in
+        *.*) patch=${minor_patch#*.} ;;
+    esac
+    for component in "$major" "$minor" "$patch"; do
+        case "$component" in
+            ''|*[!0123456789]*) return 1 ;;
+        esac
+    done
+
+    major=${major#"${major%%[!0]*}"}
+    minor=${minor#"${minor%%[!0]*}"}
+    patch=${patch#"${patch%%[!0]*}"}
+    [ -n "$major" ] || { [ -n "$minor" ] && [ "$minor" != 1 ]; } ||
+        { [ "$minor" = 1 ] && [ -n "$patch" ] && [ "$patch" != 1 ]; }
 }
 
 download() {
@@ -149,6 +176,7 @@ configure() {
     else
         status_command=$(shell_quote "$bin_path")
     fi
+    title_command="$status_command title"
     source_json=/dev/null
     target_settings=$settings
     if [ -e "$settings" ] || [ -L "$settings" ]; then
@@ -165,6 +193,10 @@ configure() {
     elif [ "$source_json" != /dev/null ]; then
         printf 'agy-statusline: Install python3, jq, or node to merge settings, or run in agy:\n/statusline %s\n' \
             "$status_command" >&2
+        if [ "$configure_title" = true ]; then
+            printf 'Set the "title" command in ~/.gemini/antigravity-cli/settings.json to: %s\n' \
+                "$title_command" >&2
+        fi
         return
     else
         editor='awk'
@@ -175,11 +207,11 @@ configure() {
     settings_tmp=$(mktemp "$target_dir/.settings.json.XXXXXXXX")
     case "$editor" in
         python3)
-            python3 - "$source_json" "$status_command" "$stack" > "$settings_tmp" <<'PY'
+            python3 - "$source_json" "$status_command" "$stack" "$title_command" "$configure_title" > "$settings_tmp" <<'PY'
 import json
 import sys
 
-source, command, stack = sys.argv[1:]
+source, command, stack, title_command, configure_title = sys.argv[1:]
 with open(source, encoding="utf-8-sig") as f:
     settings = {} if source == "/dev/null" else json.load(f)
 if not isinstance(settings, dict):
@@ -191,11 +223,18 @@ line.update(type="command", command=command, enabled=True)
 if stack == "true":
     line["stack_with_default"] = True
 settings["statusLine"] = line
+if configure_title == "true":
+    title = settings.get("title")
+    if not isinstance(title, dict):
+        title = {}
+    title.update(type="command", command=title_command, enabled=True)
+    settings["title"] = title
 print(json.dumps(settings, indent=2))
 PY
             ;;
         jq)
             jq -es --arg command "$status_command" --argjson stack "$stack" \
+                --arg title_command "$title_command" --argjson configure_title "$configure_title" \
                 --arg source "$source_json" '
                 if $source == "/dev/null" then {}
                 elif length == 1 and (.[0] | type == "object") then .[0]
@@ -204,12 +243,18 @@ PY
                     if type == "object" then . else {} end
                     | . + {type: "command", command: $command, enabled: true}
                     | if $stack then .stack_with_default = true else . end
-                )' "$source_json" > "$settings_tmp"
+                )
+                | if $configure_title then
+                    .title |= (
+                        if type == "object" then . else {} end
+                        | . + {type: "command", command: $title_command, enabled: true}
+                    )
+                  else . end' "$source_json" > "$settings_tmp"
             ;;
         node)
-            node - "$source_json" "$status_command" "$stack" > "$settings_tmp" <<'JS'
+            node - "$source_json" "$status_command" "$stack" "$title_command" "$configure_title" > "$settings_tmp" <<'JS'
 const fs = require("fs");
-const [source, command, stack] = process.argv.slice(2);
+const [source, command, stack, titleCommand, configureTitle] = process.argv.slice(2);
 const settings = source === "/dev/null" ? {} :
     JSON.parse(fs.readFileSync(source, "utf8").replace(/^\uFEFF/, ""));
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -218,26 +263,39 @@ const existing = isObject(settings.statusLine) ? settings.statusLine : {};
 const line = { ...existing, type: "command", command, enabled: true };
 if (stack === "true") line.stack_with_default = true;
 settings.statusLine = line;
+if (configureTitle === "true") {
+    const title = isObject(settings.title) ? settings.title : {};
+    settings.title = { ...title, type: "command", command: titleCommand, enabled: true };
+}
 console.log(JSON.stringify(settings, null, 2));
 JS
             ;;
         awk)
-            AGY_INSTALL_COMMAND=$status_command LC_ALL=C awk -v stack="$stack" '
+            AGY_INSTALL_COMMAND=$status_command AGY_INSTALL_TITLE_COMMAND=$title_command LC_ALL=C \
+                awk -v stack="$stack" -v configure_title="$configure_title" '
+                function json_escape(value,    i, c, escaped) {
+                    escaped = ""
+                    for (i = 1; i <= length(value); i++) {
+                        c = substr(value, i, 1)
+                        if (c in control) escaped = escaped control[c]
+                        else if (c == "\"" || c == "\\") escaped = escaped "\\" c
+                        else escaped = escaped c
+                    }
+                    return escaped
+                }
                 BEGIN {
-                    command = ENVIRON["AGY_INSTALL_COMMAND"]
                     for (i = 1; i < 32; i++) {
                         control[sprintf("%c", i)] = sprintf("\\u%04x", i)
                     }
-                    printf "{\"statusLine\":{\"type\":\"command\",\"command\":\""
-                    for (i = 1; i <= length(command); i++) {
-                        c = substr(command, i, 1)
-                        if (c in control) printf "%s", control[c]
-                        else if (c == "\"" || c == "\\") printf "\\%s", c
-                        else printf "%s", c
-                    }
-                    printf "\",\"enabled\":true"
+                    printf "{\"statusLine\":{\"type\":\"command\",\"command\":\"%s\",\"enabled\":true",
+                        json_escape(ENVIRON["AGY_INSTALL_COMMAND"])
                     if (stack == "true") printf ",\"stack_with_default\":true"
-                    print "}}"
+                    printf "}"
+                    if (configure_title == "true") {
+                        printf ",\"title\":{\"type\":\"command\",\"command\":\"%s\",\"enabled\":true}",
+                            json_escape(ENVIRON["AGY_INSTALL_TITLE_COMMAND"])
+                    }
+                    print "}"
                 }' > "$settings_tmp"
             ;;
     esac
@@ -256,11 +314,13 @@ main() {
     version=
     custom_dir=
     no_configure=false
+    configure_title=true
     stack=false
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --canary) canary=true ;;
             --no-configure) no_configure=true ;;
+            --no-title) configure_title=false ;;
             --stack-with-default) stack=true ;;
             --version|--version=*)
                 case "$1" in
@@ -335,7 +395,13 @@ main() {
     mv -f "$bin_tmp" "$bin_path"
     bin_tmp=
 
-    if [ "$no_configure" = false ]; then configure; fi
+    if [ "$no_configure" = false ]; then
+        if [ "$configure_title" = true ] && ! supports_title_tag "$tag"; then
+            configure_title=false
+            printf 'agy-statusline: Skipping title configuration (%s does not include the title subcommand).\n' "$tag" >&2
+        fi
+        configure
+    fi
     printf 'Installed %s to %s\n' "$tag" "$bin_path"
 }
 
